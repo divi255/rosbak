@@ -18,7 +18,7 @@ fail, you have no access to them.
 
 # Requirements
 
-* RouterOS > 6.45, as **rosbak** uses scp
+* RouterOS >= 6.45, as **rosbak** uses scp
 * RouterOS ssh service should be turned on
 * You should have an access to RouterOS host
 
