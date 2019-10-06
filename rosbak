@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+
+__author__ = 'Sergei S., https://www.makeitwork.cz/'
+__license__ = 'MIT'
+__version__ = '0.0.1'
+
+import argparse
+import yaml
+import time
+import os
+from datetime import datetime
+
+
+try:
+    yaml.warnings({'YAMLLoadWarning': False})
+except:
+    pass
+
+ap = argparse.ArgumentParser(
+    description='RouterOS backup tool version {}'.format(__version__))
+
+ap.add_argument('-f',
+                '--config',
+                help='Configuration file',
+                metavar='FILE',
+                default='/usr/local/etc/rosbak.yml')
+ap.add_argument('-p', '--port', help='SSH port', metavar='PORT', type=int)
+ap.add_argument('-i', '--ssh-key', help='SSH identity file', metavar='FILE')
+ap.add_argument('-u', '--username', help='User name', metavar='USER')
+ap.add_argument('-d', '--dir', help='Destination directory', metavar='PATH')
+ap.add_argument('-z',
+                '--delay',
+                help='Backup creation delay',
+                metavar='SEC',
+                type=float)
+ap.add_argument('-o', '--fname', help='Custom backup name', metavar='NAME')
+ap.add_argument('-k', '--keep', help='Keep backup on host', action='store_true')
+ap.add_argument('-x',
+                '--export',
+                help='Export config to file as well',
+                action='store_true')
+
+ap.add_argument('host', help='Host name or IP', metavar='HOST')
+
+a = ap.parse_args().__dict__
+
+try:
+    with open(a['config']) as fh:
+        all_cfg = yaml.load(fh)
+except FileNotFoundError:
+    all_cfg = {}
+
+cfg = all_cfg.get(a['host'])
+if not cfg: cfg = {}
+if not cfg.get('dir'):
+    cfg['dir'] = all_cfg.get('dir')
+
+defaults = {
+    'dir': '.',
+    'port': 22,
+    'fname': a['host'] + datetime.strftime(datetime.now(), '-%Y%m%d-%H%M%S'),
+    'username': 'admin',
+    'delay': 2
+}
+
+for d in [
+        'dir', 'port', 'fname', 'ssh_key', 'keep', 'export', 'username', 'delay'
+]:
+    if a.get(d):
+        cfg[d] = a[d]
+    else:
+        if not cfg.get(d):
+            cfg[d] = all_cfg.get(d)
+            if not cfg.get(d):
+                cfg[d] = defaults.get(d)
+
+if '{host}' in cfg['dir']:
+    cfg['dir'] = cfg['dir'].format(host=a['host'])
+
+host = cfg['addr'] if 'addr' in cfg else a['host']
+
+ssh_cmd = 'ssh ' + \
+    '-p {port} {key} {user}@{host} '.format(
+    port=cfg['port'],
+    key=('-i ' + cfg['ssh_key']) if cfg.get('ssh_key') else '',
+    user=cfg['username'],
+    host=host)
+
+scp_cmd = 'scp -P {port} {key} {user}@{host}'.format(
+    port=cfg['port'],
+    key=('-i ' + cfg['ssh_key']) if cfg.get('ssh_key') else '',
+    user=cfg['username'],
+    host=host)
+
+
+def ros_cmd(cmd):
+    return os.system('{s} \'{cmd}\' > /dev/null'.format(s=ssh_cmd,
+                                                        cmd=cmd)) == 0
+
+
+def ros_copy(src, dest):
+    return os.system('{s}:/{src} {dest} '.format(s=scp_cmd, src=src,
+                                                 dest=dest)) == 0
+
+
+if not ros_cmd('/system backup save name={f}'.format(f=cfg['fname'])):
+    raise RuntimeError('Unable to create backup')
+
+if cfg['export'] and not ros_cmd('/export file="{f}"'.format(f=cfg['fname'])):
+    raise RuntimeError('Unable to create export')
+
+if cfg['dir'] != '.':
+    try:
+        os.mkdir(cfg['dir'])
+    except:
+        pass
+
+time.sleep(cfg['delay'])
+
+if not ros_copy(cfg['fname'] + '.backup', cfg['dir'] + '/'):
+    raise RuntimeError('Unable to copy backup file')
+
+if cfg['export'] and not ros_copy(cfg['fname'] + '.rsc', cfg['dir'] + '/'):
+    raise RuntimeError('Unable to copy export file')
+
+if not cfg['keep']:
+    if not ros_cmd('/file remove "{f}.backup"'.format(f=cfg['fname'])):
+        raise RuntimeError('Unable to delete backup file')
+
+    if cfg['export'] and not ros_cmd(
+            '/file remove "{f}.rsc"'.format(f=cfg['fname'])):
+        raise RuntimeError('Unable to delete export file')

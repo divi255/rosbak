@@ -1,0 +1,5 @@
+dir: /backups/{host}
+router1:
+  addr: 10.1.1.1
+  port: 222
+  export: true
